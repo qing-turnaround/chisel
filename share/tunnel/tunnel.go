@@ -91,7 +91,7 @@ func (t *Tunnel) BindSSH(ctx context.Context, c ssh.Conn, reqs <-chan *ssh.Reque
 	t.activatingConn.Done()
 	//optional keepalive loop against this connection
 	if t.Config.KeepAlive > 0 {
-		go t.keepAliveLoop(c)
+		go t.keepAliveLoop(ctx, c)
 	}
 	//block until closed
 	go t.handleSSHRequests(reqs)
@@ -186,37 +186,28 @@ func (t *Tunnel) BindRemotes(ctx context.Context, remotes []*settings.Remote) er
 	return err
 }
 
-func (t *Tunnel) keepAliveLoop(sshConn ssh.Conn) {
-	//ping forever
+func (t *Tunnel) keepAliveLoop(ctx context.Context, sshConn ssh.Conn) {
 	pingTimeout := settings.EnvDuration("PING_TIMEOUT", t.Config.KeepAlive)
 	ticker := time.NewTicker(t.Config.KeepAlive)
 	defer ticker.Stop()
-	//stop the loop when the connection closes
-	closed := make(chan struct{})
-	go func() {
-		sshConn.Wait()
-		close(closed)
-	}()
 	for {
 		select {
-		case <-closed:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		if err := t.keepAlivePing(sshConn, pingTimeout); err != nil {
+		if err := t.keepAlivePing(ctx, sshConn, pingTimeout); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			t.Debugf("ping failed: %s", err)
 			break
 		}
 	}
-	//close ssh connection on abnormal ping
 	sshConn.Close()
 }
 
-//keepAlivePing sends an ssh ping request and waits for the reply.
-//SendRequest blocks indefinitely on a dead TCP connection (OS sleep/wake,
-//NAT timeout, server hard reboot — no RST arrives), so race it against
-//a timer and report failure when no reply arrives in time.
-func (t *Tunnel) keepAlivePing(sshConn ssh.Conn, timeout time.Duration) error {
+func (t *Tunnel) keepAlivePing(ctx context.Context, sshConn ssh.Conn, timeout time.Duration) error {
 	errc := make(chan error, 1)
 	go func() {
 		_, b, err := sshConn.SendRequest("ping", true, nil)
@@ -230,5 +221,7 @@ func (t *Tunnel) keepAlivePing(sshConn ssh.Conn, timeout time.Duration) error {
 		return err
 	case <-time.After(timeout):
 		return errors.New("ping timeout")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
