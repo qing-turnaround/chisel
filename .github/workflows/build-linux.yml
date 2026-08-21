@@ -1,0 +1,44 @@
+name: build-linux-binary
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, fix-goroutine-leak]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/build-linux.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build linux/amd64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o chisel-linux-amd64 .
+
+      - name: Verify
+        run: file chisel-linux-amd64 && ls -la chisel-linux-amd64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chisel-linux-amd64
+          path: chisel-linux-amd64
+          retention-days: 7
